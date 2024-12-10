@@ -1,0 +1,158 @@
+---
+title: "finalproject"
+author: "Jeron Perry"
+format: html
+---
+
+# Load Libraries
+```{R}
+# Load the tidyverse package 
+library(tidyverse)
+#Load the tidycensus package
+library(tidycensus)
+#Load the sf package
+library(sf)
+#Load the dplyr package 
+library(dplyr)
+```
+
+# Read in the Zillow and ACS Data
+```{r}
+# Load in the zillow data set
+data = read_csv(here::here("zillow_data.csv")) # Read in the Zillow data set
+
+# Load in the ACS dataset for 2022 for "B19019_001"
+zcta_income_2022 <- get_acs(
+  geography = "zcta",
+  variables = "B19019_001",
+  year = 2022,
+  survey = "acs5"
+)
+
+# Load in the ACS dataset for 2012 for "B19019_001"
+zcta_income_2012 <- get_acs(
+  geography = "zcta",
+  variables = "B19019_001",
+  year = 2012,
+  survey = "acs5"
+)
+```
+
+# Filtering the Data 
+```{r}
+# Select only the useful variables in the zillow data set
+data <- data |>
+  select("RegionName", "State", "2012-01-31" : "2012-12-31", "2022-01-31" : "2022-12-31")
+
+# Rename Columns in the Zillow Dataset 
+data <- data |>
+  rename(zip_code = RegionName)
+
+# Filter the Dataset to just NC zipcodes
+nc_data <- data |>
+  filter(State == "NC")
+
+# Calculate the 2012 average home price for each zip code
+nc_data <- nc_data |>
+  mutate(twelve_yearly_average = (`2012-01-31` + `2012-02-29` + `2012-03-31` + `2012-04-30` + `2012-05-31` + `2012-06-30` + `2012-07-31` + `2012-08-31` + `2012-09-30` + `2012-10-31` + `2012-11-30` + `2012-12-31`)/12)
+
+# Calculate the 2022 average home price for each zip code
+nc_data <- nc_data |>
+  mutate(twentytwo_yearly_average = (`2022-01-31` + `2022-02-28` + `2022-03-31` + `2022-04-30` + `2022-05-31` + `2022-06-30` + `2022-07-31` + `2022-08-31` + `2022-09-30` + `2022-10-31` + `2022-11-30` + `2022-12-31`)/12)
+
+#Calculate the percent change between 2012 and 2022 for all zip codes
+nc_data <- nc_data |>
+  mutate(housing_pct_change = (twentytwo_yearly_average - twelve_yearly_average)/(twelve_yearly_average)*100)
+
+# Filter the 2012 ACS dataset using a regular expression so the zip code shows 
+zcta_income_2012 <- zcta_income_2012 |>
+  mutate(zip_code = str_extract(NAME, "\\d{5}"))
+
+# Filter the 2012 ACS dataset to only needed variables 
+zcta_income_2012 <- zcta_income_2012 |>
+  select("zip_code", "estimate")
+
+# Rename the estimate column
+zcta_income_2012 <- zcta_income_2012 |>
+  rename(twelve_median_income = estimate)
+
+# Filter the 2022 ACS dataset to only needed variables 
+zcta_income_2022 <- zcta_income_2022 |>
+  select("GEOID", "estimate")
+
+# Rename the estimate column
+zcta_income_2022 <- zcta_income_2022 |>
+  rename(twentytwo_median_income = estimate)
+
+# Rename the GEOID column
+zcta_income_2022 <- zcta_income_2022 |>
+  rename(zip_code = GEOID)
+```
+
+# Join the Data 
+```{r}
+# Join the 2012 ACS data to the NC Zillow data set 
+joined_data <- left_join(nc_data, zcta_income_2012, by = "zip_code")
+
+# Join the 2022 ACS data to the NC Zillow data set 
+joined_data <- joined_data |>
+  left_join(zcta_income_2022, by = "zip_code")
+
+# Calculate the percent change in median income between 2012 and 2022
+joined_data <- joined_data |>
+  mutate(income_pct_change = (twentytwo_median_income - twelve_median_income)/(twelve_median_income)*100)
+```
+
+# Analyze and Visualize the Data
+```{r}
+# Summarize the average percent changes for income and housing prices in the dataset
+summary_data <- joined_data |>
+  summarize(
+    avg_income_change = mean(income_pct_change, na.rm = T),
+    avg_housing_change = mean(housing_pct_change, na.rm = T)
+  )
+
+# Find the zip code with the maximum housing price percent change
+max_housing <- joined_data |>
+  filter(housing_pct_change == max(housing_pct_change, na.rm = T)) |>
+  select(zip_code, housing_pct_change)
+
+# Find the zip code with the minimum housing price percent change
+min_housing <- joined_data |>
+  filter(housing_pct_change == min(housing_pct_change, na.rm = T)) |>
+  select(zip_code, housing_pct_change)
+
+# Find the zip code with the maximum income percent change
+max_income <- joined_data |>
+  filter(income_pct_change == max(income_pct_change, na.rm = T)) |>
+  select(zip_code, income_pct_change)
+
+# Find the zip code with the minimum income percent change
+min_income <- joined_data |>
+  filter(income_pct_change == min(income_pct_change, na.rm = T)) |>
+  select(zip_code, income_pct_change)
+
+# Create a scatter plot showing the relationship between the percent change in housing price and percent change in income
+ggplot(joined_data, aes(x = income_pct_change, y = housing_pct_change)) +
+  geom_point() +
+  labs(title = "Percent Change in Income vs. Housing Prices",
+       x = "Income Percent Change (2012-2022)",
+       y = "Housing Price Percent Change (2012-2022)") +
+  theme_minimal()
+
+# Create a histogram showing the distribution of percent change in housing price
+ggplot(joined_data, aes(x = housing_pct_change)) +
+  geom_histogram() +
+  labs(title = "Distribution of Housing Price Percent Change",
+       x = "Percent Change",
+       y = "Count") +
+  theme_minimal()
+
+# Create a histogram showing the distribution of percent change in income
+ggplot(joined_data, aes(x = income_pct_change)) +
+  geom_histogram() +
+  labs(title = "Distribution of Income Price Percent Change",
+       x = "Percent Change",
+       y = "Count") +
+  theme_minimal()
+```
